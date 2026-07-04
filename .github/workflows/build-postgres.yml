@@ -42,18 +42,20 @@ jobs:
       - name: Install build deps (Linux)
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y build-essential bison flex pkg-config patchelf
-      - name: Pick macOS SDK (avoid 15.4-gated strchrnul)
+      - name: Pick a pre-15.4 macOS SDK (avoid the strchrnul symbol)
         if: runner.os == 'macOS'
         run: |
-          SDK14=$(ls -d /Applications/Xcode_15*.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX14*.sdk 2>/dev/null | head -1)
-          if [ -n "$SDK14" ]; then
-            echo "Using macOS 14 SDK: $SDK14 (postgres uses its own strchrnul, binary stays back-compatible)"
-            echo "SDKROOT=$SDK14" >> $GITHUB_ENV
-            echo "MACOSX_DEPLOYMENT_TARGET=13.0" >> $GITHUB_ENV
-          else
-            echo "No macOS 14 SDK on runner; targeting 15.4 so strchrnul is available (binary needs macOS 15.4+)"
-            echo "MACOSX_DEPLOYMENT_TARGET=15.4" >> $GITHUB_ENV
-          fi
+          echo 'Available SDKs:'; xcodebuild -showsdks 2>/dev/null | grep -i macos || true
+          SDK=''
+          for c in $(xcrun --sdk macosx14 --show-sdk-path 2>/dev/null) \
+                   $(ls -d /Applications/Xcode_1[456]*.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX1[34].*.sdk 2>/dev/null) \
+                   $(ls -d /Library/Developer/CommandLineTools/SDKs/MacOSX1[34].*.sdk 2>/dev/null); do
+            [ -d "$c" ] && [ ! -e "$c/usr/include/_strchrnul_marker" ] && SDK="$c" && break
+          done
+          if [ -z "$SDK" ]; then echo '::error::No pre-15.4 macOS SDK on this runner — cannot build a back-compatible postgres'; exit 1; fi
+          echo "Using SDK: $SDK"
+          echo "SDKROOT=$SDK" >> $GITHUB_ENV
+          echo 'MACOSX_DEPLOYMENT_TARGET=13.0' >> $GITHUB_ENV
       - name: Build Postgres and pgvector
         env:
           PG_VERSION: ${{ inputs.pg_version }}
@@ -61,6 +63,17 @@ jobs:
           PLATFORM: ${{ inputs.platform }}
           ARCH: ${{ inputs.arch }}
         run: bash studio/scripts/build-postgres-unix.sh
+      - name: Guard — reject binary that links macOS 15.4 symbols
+        if: runner.os == 'macOS'
+        run: |
+          TB=$(ls postgres-*-darwin-*.tar.gz 2>/dev/null | head -1)
+          rm -rf /tmp/pgcheck && mkdir -p /tmp/pgcheck && tar -xzf "$TB" -C /tmp/pgcheck postgres/bin/initdb
+          BIN=/tmp/pgcheck/postgres/bin/initdb
+          echo "checking: $BIN (from $TB)"
+          if nm -u "$BIN" 2>/dev/null | grep -q strchrnul; then
+            echo '::error::built binary references _strchrnul (would dyld-crash on older macOS) — failing before upload'; nm -u "$BIN" | grep strchrnul; exit 1
+          fi
+          echo 'OK: no _strchrnul reference'
       - name: Upload to R2
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.CLOUDFLARE_R2_ACCESS_KEY_ID }}
