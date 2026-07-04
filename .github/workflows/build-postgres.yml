@@ -42,6 +42,18 @@ jobs:
       - name: Install build deps (Linux)
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y build-essential bison flex pkg-config patchelf
+      - name: Pick macOS SDK (avoid 15.4-gated strchrnul)
+        if: runner.os == 'macOS'
+        run: |
+          SDK14=$(ls -d /Applications/Xcode_15*.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX14*.sdk 2>/dev/null | head -1)
+          if [ -n "$SDK14" ]; then
+            echo "Using macOS 14 SDK: $SDK14 (postgres uses its own strchrnul, binary stays back-compatible)"
+            echo "SDKROOT=$SDK14" >> $GITHUB_ENV
+            echo "MACOSX_DEPLOYMENT_TARGET=13.0" >> $GITHUB_ENV
+          else
+            echo "No macOS 14 SDK on runner; targeting 15.4 so strchrnul is available (binary needs macOS 15.4+)"
+            echo "MACOSX_DEPLOYMENT_TARGET=15.4" >> $GITHUB_ENV
+          fi
       - name: Build Postgres and pgvector
         env:
           PG_VERSION: ${{ inputs.pg_version }}
