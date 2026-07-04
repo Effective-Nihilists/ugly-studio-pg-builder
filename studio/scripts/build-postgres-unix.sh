@@ -22,7 +22,8 @@ cd "${WORK}/postgresql-${PG_VERSION}"
   --without-readline \
   --without-zlib \
   --with-openssl=no \
-  --disable-rpath
+  --disable-rpath \
+  ac_cv_func_strchrnul=no
 make -j"$(getconf _NPROCESSORS_ONLN)" world-bin
 make install-world-bin
 
