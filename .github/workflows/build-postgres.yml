@@ -1,0 +1,45 @@
+name: Build Postgres + pgvector
+
+on:
+  workflow_dispatch:
+    inputs:
+      pg_version:      { description: 'Postgres version',  required: true, default: '16.6' }
+      pgvector_version:{ description: 'pgvector version',  required: true, default: '0.8.0' }
+      runner:          { description: 'runner label',      required: true, default: 'macos-15-large' }
+      platform:        { description: 'darwin|linux',      required: true, default: 'darwin' }
+      arch:            { description: 'x64|arm64',          required: true, default: 'x64' }
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build deps (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install bison flex
+          echo "/opt/homebrew/opt/bison/bin:/usr/local/opt/bison/bin" >> $GITHUB_PATH
+          echo "/opt/homebrew/opt/flex/bin:/usr/local/opt/flex/bin"   >> $GITHUB_PATH
+      - name: Install build deps (linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y build-essential bison flex pkg-config patchelf
+      - name: Build Postgres + pgvector
+        env:
+          PG_VERSION: ${{ inputs.pg_version }}
+          PGVECTOR_VERSION: ${{ inputs.pgvector_version }}
+          PLATFORM: ${{ inputs.platform }}
+          ARCH: ${{ inputs.arch }}
+        run: bash studio/scripts/build-postgres-unix.sh
+      - name: Upload to R2
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.CLOUDFLARE_R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.CLOUDFLARE_R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          R2_ENDPOINT: https://9edc7fbe4a55b0b6489df8e7a120526c.r2.cloudflarestorage.com
+        run: |
+          FILE="postgres-${{ inputs.pg_version }}-${{ inputs.platform }}-${{ inputs.arch }}.tar.gz"
+          aws --endpoint-url "$R2_ENDPOINT" s3 cp "$FILE" "s3://ugly-releases/studio/binaries/$FILE" --cache-control "public, max-age=31536000, immutable"
